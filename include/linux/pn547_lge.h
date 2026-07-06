@@ -39,7 +39,7 @@
 
 #define PN547_MAGIC     0xE9
 
-#define PN547_DRV_NAME      "pn547"
+#define PN547_DRV_NAME      "pn54x"
 
 /*
  * pn547 power control via ioctl

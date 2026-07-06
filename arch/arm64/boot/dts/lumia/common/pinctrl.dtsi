@@ -80,8 +80,8 @@
 			label = "cnss-lpass";
 			/* default state */
 			cnss_lpass_default: cnss_lpass_default {
-				drive-strength = <16>;
-				bias-pull-down;
+				drive-strength = <2>;
+				bias-pull-up;
 			};
 		};
 		

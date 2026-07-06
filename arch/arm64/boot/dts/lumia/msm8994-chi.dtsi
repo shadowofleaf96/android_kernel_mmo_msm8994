@@ -15,6 +15,7 @@
  #include "../qcom/msm8994-camera-sensor-mtp.dtsi"
  
  #include "common/connectivity.dtsi"
+ #include "common/nfc.dtsi"
  #include "common/sdhc.dtsi"
  #include "common/haptics.dtsi"
  #include "common/touch.dtsi"
@@ -26,6 +27,67 @@
  #include "common/mdss.dtsi"
  #include "common/hdmi.dtsi"
  #include "common/reserved-memory.dtsi"
+ #include "common/ice40.dtsi"
+ #include "common/torch.dtsi"
+ 
+ / {
+         aliases {
+                 i2c1 = &i2c_1;
+         };
+ };
+ 
+ &soc {
+                 i2c_1: i2c@f9923000 {
+                 compatible = "qcom,i2c-msm-v2";
+                 #address-cells = <1>;
+                 #size-cells = <0>;
+                 reg-names = "qup_phys_addr";
+                 reg = <0xf9923000 0x1000>;
+                 interrupt-names = "qup_irq";
+                 interrupts = <0 95 0>;
+                 qcom,clk-freq-out = <400000>;
+                 qcom,clk-freq-in  = <19200000>;
+                 clock-names = "iface_clk", "core_clk";
+                 clocks = <&clock_gcc clk_gcc_blsp1_ahb_clk>,
+                          <&clock_gcc clk_gcc_blsp1_qup1_i2c_apps_clk>;
+ 
+                 pinctrl-names = "i2c_active", "i2c_sleep";
+                 pinctrl-0 = <&i2c_1_active>;
+                 pinctrl-1 = <&i2c_1_sleep>;
+                 qcom,noise-rjct-scl = <0>;
+                 qcom,noise-rjct-sda = <0>;
+                 qcom,master-id = <86>;
+                 dmas = <&dma_blsp1 10 64 0x20000020 0x20>,
+                         <&dma_blsp1 11 32 0x20000020 0x20>;
+                 dma-names = "tx", "rx";
+ 
+         };
+ 
+                 tlmm_pinmux: pinctrl@fd510000 {
+                 compatible = "qcom,msm-tlmm-8994", "qcom,msm-tlmm-8974";
+                 reg = <0xfd510000 0x4000>;
+                 interrupts = <0 208 0>;
+ 
+                         pmx_i2c_1 {
+                         qcom,pins = <&gp 2>, <&gp 3>; /* SDA, SCL */
+                         qcom,num-grp-pins = <2>;
+                         qcom,pin-func = <3>;
+                         label = "pmx_i2c_1";
+ 
+                         status = "disabled";
+ 
+                         i2c_1_active: i2c_1_active {
+                                 drive-strength = <2>;
+                                 bias-disable;
+                         };
+ 
+                         i2c_1_sleep: i2c_1_sleep {
+                                 drive-strength = <2>;
+                                 bias-disable;
+                         };
+                 };
+         };
+ };
  
  #include "panels/dsi-panel-duke-wqhd-dualdsi-cmd.dtsi"
  
@@ -231,19 +293,33 @@
  };
  
  &pcie0 {
-	 status = "disabled";
+	 status = "ok";
  };
  
  &usb3 {
-	 status = "ok";
+         status = "ok";
+         qcom,usbin-vadc = <&pmi8994_vadc>;
+         qcom,internal-chg-detect;
+ 
+         dwc3@f9200000 {
+                 maximum-speed = "high-speed";
+                 no-set-vbus-power;
+         };
  };
  
  &hsphy0 {
-	 status = "ok";
+         status = "ok";
+         qcom,hsphy-init-host = <0x00D191A4>;
+         qcom,hsphy-init = <0x00D1D9A4>;
+         qcom,charger = <&pmi8994_charger>;
  };
  
  &ssphy0 {
-	 status = "ok";
+         status = "ok";
+ };
+ 
+ &usb_otg_switch {
+         status = "ok";
  };
  
  &qcom_crypto1fde {
@@ -266,17 +342,33 @@
 	 status = "okay";
  };
  
- ///{
- //	mtp_batterydata: qcom,battery-data {
- //		qcom,batt-id-range-pct = <15>;
- //		#include "batterydata-itech-3000mah.dtsi"
- //	};
- //};
+&pmi8994_mpps {
+	 mpp@a300 { /* MPP 4 */
+		 /* WLED FET */
+		 qcom,mode = <1>;	/* DIGITAL OUT */
+		 qcom,vin-sel = <0>;	/* VIN0 */
+		 qcom,master-en = <1>;
+		 status = "okay";
+	 };
+ };
+ 
+ /{
+	 cityman_batterydata: qcom,battery-data {
+		 qcom,batt-id-range-pct = <15>;
+		 #include "microsoft_bvt4d_3340mah.dtsi"
+	 };
+ };
+ 
+ &pmi8994_charger {
+	 qcom,battery-data = <&cityman_batterydata>;
+ };
  
  &cnss {
-	 pinctrl-names = "default";
-	 pinctrl-0 = <&cnss_default &pcie0_clkreq_default>;
- };
+    wlan-bootstrap-gpio = <&msm_gpio 112 0>;
+    pinctrl-names = "default";
+    pinctrl-0 = <&cnss_lpass_default>;
+};
+
  
  &usb_ehci {
 	 status = "ok";
@@ -286,4 +378,3 @@
  &qusb_phy {
 	 status = "ok";
  };
- 
