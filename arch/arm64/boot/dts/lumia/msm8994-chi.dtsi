@@ -364,9 +364,11 @@
  };
  
  &cnss {
+    wlan-en-gpio = <&msm_gpio 113 0>;
     wlan-bootstrap-gpio = <&msm_gpio 112 0>;
     pinctrl-names = "default";
     pinctrl-0 = <&cnss_lpass_default>;
+    qcom,skip-power-cycle;
 };
 
  
@@ -378,3 +380,9 @@
  &qusb_phy {
 	 status = "ok";
  };
+
+&pcie1 {
+	status = "ok";
+	/delete-property/ qcom,l1-supported;
+	/delete-property/ qcom,l1ss-supported;
+};

@@ -307,6 +307,7 @@ static struct cnss_data {
   atomic_t auto_suspended;
   bool monitor_wake_intr;
   struct cnss_dual_wifi dual_wifi_info;
+  bool skip_power_cycle;
 } *penv;
 
 static unsigned int pcie_link_down_panic;
@@ -1560,12 +1561,14 @@ static int cnss_wlan_pci_probe(struct pci_dev *pdev,
     penv->pcie_link_state = PCIE_LINK_DOWN;
   }
 
-  cnss_wlan_gpio_set(gpio_info, WLAN_EN_LOW);
-  ret = cnss_wlan_vreg_set(vreg_info, VREG_OFF);
+  if (!penv->skip_power_cycle) {
+    cnss_wlan_gpio_set(gpio_info, WLAN_EN_LOW);
+    ret = cnss_wlan_vreg_set(vreg_info, VREG_OFF);
 
-  if (ret) {
-    pr_err("can't turn off wlan vreg\n");
-    goto err_pcie_suspend;
+    if (ret) {
+      pr_err("can't turn off wlan vreg\n");
+      goto err_pcie_suspend;
+    }
   }
 
   cnss_wlan_fw_mem_alloc(pdev);
@@ -2143,36 +2146,46 @@ int cnss_wlan_register_driver(struct cnss_wlan_driver *driver) {
   }
 
 again:
-  if (pdev && cnss_get_pci_dev_bus_number(pdev) >= 0) {
-    pr_debug("cnss: suspending PCIe link before power cycle\n");
-    cnss_msm_pcie_pm_control(MSM_PCIE_SUSPEND, cnss_get_pci_dev_bus_number(pdev), pdev, PM_OPTIONS_SUSPEND_LINK_DOWN);
-  }
+  if (penv->skip_power_cycle && !probe_again) {
+    pr_info("cnss: skip power cycle (UEFI pre-initialized)\n");
+    if (penv->wlan_bootstrap_gpio > 0) {
+      gpio_set_value(penv->wlan_bootstrap_gpio, WLAN_BOOTSTRAP_HIGH);
+      msleep(WLAN_BOOTSTRAP_DELAY);
+    }
+    cnss_wlan_gpio_set(gpio_info, WLAN_EN_HIGH);
+    msleep(WLAN_ENABLE_DELAY);
+  } else {
+    if (pdev && cnss_get_pci_dev_bus_number(pdev) >= 0) {
+      pr_debug("cnss: suspending PCIe link before power cycle\n");
+      cnss_msm_pcie_pm_control(MSM_PCIE_SUSPEND, cnss_get_pci_dev_bus_number(pdev), pdev, PM_OPTIONS_SUSPEND_LINK_DOWN);
+    }
 
-  cnss_wlan_gpio_set(gpio_info, WLAN_EN_LOW);
-  if (penv->wlan_bootstrap_gpio > 0)
-    gpio_set_value(penv->wlan_bootstrap_gpio, WLAN_BOOTSTRAP_LOW);
-  cnss_wlan_vreg_set(vreg_info, VREG_OFF);
-  msleep(100);
+    cnss_wlan_gpio_set(gpio_info, WLAN_EN_LOW);
+    if (penv->wlan_bootstrap_gpio > 0)
+      gpio_set_value(penv->wlan_bootstrap_gpio, WLAN_BOOTSTRAP_LOW);
+    cnss_wlan_vreg_set(vreg_info, VREG_OFF);
+    msleep(100);
 
-  ret = cnss_wlan_vreg_set(vreg_info, VREG_ON);
-  if (ret) {
-    pr_err("wlan vreg ON failed\n");
-    goto err_wlan_vreg_on;
-  }
+    ret = cnss_wlan_vreg_set(vreg_info, VREG_ON);
+    if (ret) {
+      pr_err("wlan vreg ON failed\n");
+      goto err_wlan_vreg_on;
+    }
 
-  msleep(POWER_ON_DELAY);
+    msleep(POWER_ON_DELAY);
 
-  if (penv->wlan_bootstrap_gpio > 0) {
-    gpio_set_value(penv->wlan_bootstrap_gpio, WLAN_BOOTSTRAP_HIGH);
-    msleep(WLAN_BOOTSTRAP_DELAY);
-  }
+    if (penv->wlan_bootstrap_gpio > 0) {
+      gpio_set_value(penv->wlan_bootstrap_gpio, WLAN_BOOTSTRAP_HIGH);
+      msleep(WLAN_BOOTSTRAP_DELAY);
+    }
 
-  cnss_wlan_gpio_set(gpio_info, WLAN_EN_HIGH);
-  msleep(WLAN_ENABLE_DELAY);
+    cnss_wlan_gpio_set(gpio_info, WLAN_EN_HIGH);
+    msleep(WLAN_ENABLE_DELAY);
 
-  if (pdev && cnss_get_pci_dev_bus_number(pdev) >= 0) {
-    pr_debug("cnss: resuming PCIe link after power cycle\n");
-    cnss_msm_pcie_pm_control(MSM_PCIE_RESUME, cnss_get_pci_dev_bus_number(pdev), pdev, PM_OPTIONS);
+    if (pdev && cnss_get_pci_dev_bus_number(pdev) >= 0) {
+      pr_debug("cnss: resuming PCIe link after power cycle\n");
+      cnss_msm_pcie_pm_control(MSM_PCIE_RESUME, cnss_get_pci_dev_bus_number(pdev), pdev, PM_OPTIONS);
+    }
   }
 
   if (!pdev) {
@@ -2305,12 +2318,12 @@ err_pcie_link_up:
 err_pcie_reg:
   cnss_wlan_gpio_set(gpio_info, WLAN_EN_LOW);
   cnss_wlan_vreg_set(vreg_info, VREG_OFF);
-  if (penv->pdev) {
-    pr_err("%d: Unregistering PCI device\n", __LINE__);
+  if (cnss_wlan_pci_driver.driver.bus) {
+    pr_err("%d: Unregistering PCI driver\n", __LINE__);
     pci_unregister_driver(&cnss_wlan_pci_driver);
-    penv->pdev = NULL;
-    penv->pci_register_again = true;
   }
+  penv->pdev = NULL;
+  penv->pci_register_again = true;
 
 err_wlan_vreg_on:
   penv->driver = NULL;
@@ -2737,10 +2750,15 @@ static int cnss_probe(struct platform_device *pdev) {
     goto err_get_wlan_res;
 
   /*
-   * Defer WLAN power-up and PCIe enumeration until the CLD driver loads
-   * via fwpath. Boot-time enumeration runs without bootstrap GPIO and
-   * blocks later discovery on Lumia devices (RC1 firmware/DT setup).
+   * On UEFI-booted devices (e.g. Lumia 950 XL), the firmware already
+   * powers on the WLAN chip and establishes the PCIe link. Skipping
+   * the initial power cycle prevents the kernel from killing this
+   * pre-established link, which it cannot reliably re-establish.
    */
+  penv->skip_power_cycle =
+      of_property_read_bool(dev->of_node, "qcom,skip-power-cycle");
+  if (penv->skip_power_cycle)
+    pr_info("cnss: UEFI pre-initialized mode enabled\n");
 
   penv->notify_modem_status =
       of_property_read_bool(dev->of_node, "qcom,notify-modem-status");
