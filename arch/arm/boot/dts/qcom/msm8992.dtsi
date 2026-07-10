@@ -1505,7 +1505,7 @@ energy-costs {
 
 	sound {
 		compatible = "qcom,msm8994-asoc-snd";
-		qcom,model = "msm8994-tomtom-snd-card";
+		qcom,model = "msm8992-tomtom-mtp-snd-card";
 		reg = <0xfe034000 0x4>,
 		      <0xfe035000 0x4>,
 		      <0xfe036000 0x4>,

@@ -565,3 +565,12 @@ config SOUND_CONTROL_HAX_3_GPL
 	default y
 	help
 	  FauxSound WCD93xx chipset sound control hacks 3.0 for deeper hax
+
+# NXP TFA98xx Integration for Lumia
+config SND_SOC_TFA98XX
+	tristate "NXP TFA98xx Smart Amplifier Audio Codec"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Enable support for the NXP TFA98xx smart audio amplifiers 
+	  via the I2C interface on Lumia devices.

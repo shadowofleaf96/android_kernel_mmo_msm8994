@@ -2176,6 +2176,8 @@ static int __q6asm_open_read(struct audio_client *ac,
 	open.src_endpointype = ASM_END_POINT_DEVICE_MATRIX;
 
 	open.preprocopo_id = q6asm_get_asm_topology();
+	if (open.preprocopo_id == 0)
+		open.preprocopo_id = ASM_STREAM_POSTPROCOPO_ID_NONE;
 	if ((open.preprocopo_id == ASM_STREAM_POSTPROC_TOPO_ID_DTS_HPX) ||
 	    (open.preprocopo_id == ASM_STREAM_POSTPROC_TOPO_ID_HPX_PLUS))
 		open.preprocopo_id = ASM_STREAM_POSTPROCOPO_ID_NONE;
@@ -2375,6 +2377,9 @@ static int __q6asm_open_write(struct audio_client *ac, uint32_t format,
 	open.bits_per_sample = bits_per_sample;
 
 	open.postprocopo_id = q6asm_get_asm_topology();
+	if (open.postprocopo_id == 0)
+		open.postprocopo_id = ASM_STREAM_POSTPROCOPO_ID_NONE;
+
 	if ((ac->perf_mode != LEGACY_PCM_MODE) &&
 	    ((open.postprocopo_id == ASM_STREAM_POSTPROC_TOPO_ID_DTS_HPX) ||
 	     (open.postprocopo_id == ASM_STREAM_POSTPROC_TOPO_ID_HPX_PLUS)))
@@ -2511,6 +2516,8 @@ static int __q6asm_open_read_write(struct audio_client *ac, uint32_t rd_format,
 	open.bits_per_sample = bits_per_sample;
 	/* source endpoint : matrix */
 	open.postprocopo_id = q6asm_get_asm_topology();
+	if (open.postprocopo_id == 0)
+		open.postprocopo_id = ASM_STREAM_POSTPROCOPO_ID_NONE;
 
 	open.postprocopo_id = overwrite_topology ?
 			      topology : open.postprocopo_id;

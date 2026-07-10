@@ -525,19 +525,11 @@ static int apq8094_db_device_init(void)
 
 static void msm8994_ext_control(struct snd_soc_codec *codec)
 {
-	struct snd_soc_dapm_context *dapm = &codec->dapm;
-
-	mutex_lock(&dapm->codec->mutex);
-	pr_debug("%s: msm8994_spk_control = %d", __func__, msm8994_spk_control);
-	if (msm8994_spk_control == MSM8994_SPK_ON) {
-		snd_soc_dapm_enable_pin(dapm, "Lineout_1 amp");
-		snd_soc_dapm_enable_pin(dapm, "Lineout_2 amp");
-	} else {
-		snd_soc_dapm_disable_pin(dapm, "Lineout_1 amp");
-		snd_soc_dapm_disable_pin(dapm, "Lineout_2 amp");
-	}
-	mutex_unlock(&dapm->codec->mutex);
-	snd_soc_dapm_sync(dapm);
+	/* 
+	 * Disabled for Cityman to prevent hardware short circuit/GSoD.
+	 * Cityman uses an I2C Smart Amplifier, not generic WCD9330 lineout.
+	 */
+	pr_debug("%s: msm8994_spk_control is disabled for safety.\n", __func__);
 }
 
 static int msm8994_get_spk(struct snd_kcontrol *kcontrol,
@@ -565,52 +557,19 @@ static int msm8994_set_spk(struct snd_kcontrol *kcontrol,
 
 static int msm8994_ext_us_amp_init(void)
 {
-	int ret = 0;
-
-	ext_us_amp_gpio = of_get_named_gpio(spdev->dev.of_node,
-				"qcom,ext-ult-spk-amp-gpio", 0);
-	if (ext_us_amp_gpio >= 0) {
-		ret = gpio_request(ext_us_amp_gpio, "ext_us_amp_gpio");
-		if (ret) {
-			pr_err("%s: ext_us_amp_gpio request failed, ret:%d\n",
-				__func__, ret);
-			return ret;
-		}
-		gpio_direction_output(ext_us_amp_gpio, 0);
-	}
-	return ret;
+	/* Disabled for Cityman safety */
+	return 0;
 }
 
 static void msm8994_ext_us_amp_enable(u32 on)
 {
-	if (on)
-		gpio_direction_output(ext_us_amp_gpio, 1);
-	else
-		gpio_direction_output(ext_us_amp_gpio, 0);
-
-	pr_debug("%s: US Emitter GPIO enable:%s\n", __func__,
-			on ? "Enable" : "Disable");
+	/* Disabled for Cityman safety */
 }
 
 static int msm_ext_ultrasound_event(struct snd_soc_dapm_widget *w,
-			     struct snd_kcontrol *k, int event)
+				    struct snd_kcontrol *kcontrol, int event)
 {
-	pr_debug("%s()\n", __func__);
-	if (!strcmp(w->name, "ultrasound amp")) {
-		if (!gpio_is_valid(ext_us_amp_gpio)) {
-			pr_err("%s: ext_us_amp_gpio isn't configured\n",
-				__func__);
-			return -EINVAL;
-		}
-		if (SND_SOC_DAPM_EVENT_ON(event))
-			msm8994_ext_us_amp_enable(1);
-		else
-			msm8994_ext_us_amp_enable(0);
-	} else {
-		pr_err("%s() Invalid Widget = %s\n",
-				__func__, w->name);
-		return -EINVAL;
-	}
+	/* Disabled for Cityman safety */
 	return 0;
 }
 
@@ -3368,6 +3327,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
 	},
+
 };
 
 static struct snd_soc_dai_link msm8994_hdmi_dai_link[] = {
@@ -3392,7 +3352,7 @@ static struct snd_soc_dai_link msm8994_dai_links[
 					 ARRAY_SIZE(msm8994_hdmi_dai_link)];
 
 struct snd_soc_card snd_soc_card_msm8994 = {
-	.name		= "msm8994-tomtom-snd-card",
+	.name		= "msm8994-tomtom-mtp-snd-card",
 };
 
 static int msm8994_populate_dai_link_component_of_node(
