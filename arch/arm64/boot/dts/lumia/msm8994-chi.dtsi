@@ -29,6 +29,7 @@
  #include "common/reserved-memory.dtsi"
  #include "common/ice40.dtsi"
  #include "common/torch.dtsi"
+ #include "common/sensors.dtsi"
  
  / {
          aliases {
