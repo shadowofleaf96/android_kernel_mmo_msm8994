@@ -712,6 +712,16 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 	if (ctrl->off_cmds.cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, &ctrl->off_cmds);
 
+	/*
+	 * The DSI command TX engine uses a deferred-wait mechanism that
+	 * does not honor the wait time of the last command in a sequence.
+	 * Add an explicit delay to ensure the panel has fully entered
+	 * sleep mode (0x10) before the DSI controller and PHY are
+	 * disabled, which would otherwise glitch the data lanes and
+	 * cause a brief green line artifact on AMOLED panels.
+	 */
+	msleep(120);
+
 end:
 	pinfo->blank_state = MDSS_PANEL_BLANK_BLANK;
 	pr_debug("%s:-\n", __func__);

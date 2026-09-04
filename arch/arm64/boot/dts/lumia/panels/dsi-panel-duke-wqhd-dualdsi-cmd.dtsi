@@ -95,10 +95,10 @@
 
 		qcom,mdss-dsi-on-command-state = "dsi_lp_mode";
 		qcom,mdss-dsi-off-command = [
-			/* set_display_off */
+			/* set_display_off, wait 33ms */
 			05 01 00 00 21 00 02 28 00
-			/* set_idle_on */
-       		00 24 0A 0A 26 25 09
+			/* enter_sleep_mode, wait 120ms */
+			05 01 00 00 78 00 02 10 00
 			];
 		qcom,mdss-dsi-off-command-state = "dsi_hs_mode";
 		qcom,mdss-dsi-hbm-on-command = [
@@ -196,10 +196,10 @@
 
 		qcom,mdss-dsi-on-command-state = "dsi_lp_mode";
 		qcom,mdss-dsi-off-command = [
-			/* set_display_off */
+			/* set_display_off, wait 33ms */
 			05 01 00 00 21 00 02 28 00
-			/* set_idle_on */
-       		00 24 0A 0A 26 25 09
+			/* enter_sleep_mode, wait 120ms */
+			05 01 00 00 78 00 02 10 00
 			];
 		qcom,mdss-dsi-off-command-state = "dsi_hs_mode";
 		qcom,mdss-pan-physical-width-dimension = <65>;

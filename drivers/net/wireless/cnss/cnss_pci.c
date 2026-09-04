@@ -2298,6 +2298,14 @@ again:
     }
   }
 
+  /* After first successful probe, clear skip_power_cycle so that
+   * subsequent WiFi off/on cycles perform a proper power cycle
+   * to re-establish the PCIe link (UEFI link is only valid once). */
+  if (penv->skip_power_cycle) {
+    penv->skip_power_cycle = false;
+    pr_info("cnss: first probe succeeded, disabling skip_power_cycle for future cycles\n");
+  }
+
   if (penv->notify_modem_status && wdrv->modem_status)
     wdrv->modem_status(pdev, penv->modem_current_status);
 
