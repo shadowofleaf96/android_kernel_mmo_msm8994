@@ -37,7 +37,35 @@
 #define CSID_VERSION_V40                      0x40000000
 #define MSM_CSID_DRV_NAME                    "msm_csid"
 
-#define DBG_CSID 0
+#define DBG_CSID 1
+
+/* #48: 0x3210 mapped phy1 (clock) as data (pkts=0, irq 0xd000dd).
+ * 0x4320 keeps clock on phy1 and counts packets (header ECC).
+ * 0x0234 = reverse of 0x4320 data lanes {0,2,3,4}. echo -1 for DT.
+ * #49: 0x0234 same ECC as 0x4320 (ln0=phy4). #58 P/N invert same ECC.
+ * #59: ln0=phy2 (0x4302) same ECC. #60: ln0=phy3 (0x4203) same ECC.
+ * ln0 sweep {0,2,3,4} all ECC. Default back to 0x4320. */
+static int talkman_lane_assign = 0x4320;
+module_param_named(lane_assign, talkman_lane_assign, int, 0644);
+MODULE_PARM_DESC(lane_assign, "CSID lane_assign override; -1 = DT");
+
+/* WP FUN_0041ddd4 live CORE_CTRL_1: phy_sel<<17 | 0x1000F. */
+static int talkman_ctrl1_or = 0x1000F;
+module_param_named(ctrl1_or, talkman_ctrl1_or, int, 0644);
+MODULE_PARM_DESC(ctrl1_or, "OR into CSID CORE_CTRL_1; -1 = stock 0xF");
+
+/* CAF CSID TG: skip PHY CORE_CTRL, 4080x3028 RAW10 incrementing. */
+static int talkman_tg = 1;
+module_param_named(tg, talkman_tg, int, 0644);
+MODULE_PARM_DESC(tg, "1 = CSID test generator (0xa06437)");
+static int talkman_tg_w = 4080;
+module_param_named(tg_w, talkman_tg_w, int, 0644);
+static int talkman_tg_h = 3028;
+module_param_named(tg_h, talkman_tg_h, int, 0644);
+static int talkman_tg_mode = 1;
+module_param_named(tg_mode, talkman_tg_mode, int, 0644);
+MODULE_PARM_DESC(tg_mode, "CSID TG payload 2:0 (1=incrementing)");
+
 
 #define TRUE   1
 #define FALSE  0
@@ -82,11 +110,9 @@ static int msm_csid_cid_lut(
 				 __func__, csid_lut_params->vc_cfg[i]->cid);
 			return -EINVAL;
 		}
-		CDBG("%s lut params num_cid = %d, cid = %d\n",
-			__func__,
-			csid_lut_params->num_cid,
-			csid_lut_params->vc_cfg[i]->cid);
-		CDBG("%s lut params dt = 0x%x, df = %d\n", __func__,
+		pr_err("talkman_csid lut n=%d i=%d cid=%u dt=0x%x df=%u\n",
+			csid_lut_params->num_cid, i,
+			csid_lut_params->vc_cfg[i]->cid,
 			csid_lut_params->vc_cfg[i]->dt,
 			csid_lut_params->vc_cfg[i]->decode_format);
 		if (csid_lut_params->vc_cfg[i]->dt < 0x12 ||
@@ -111,6 +137,24 @@ static int msm_csid_cid_lut(
 			csid_dev->ctrl_reg->csid_reg.csid_cid_n_cfg_addr +
 			(csid_lut_params->vc_cfg[i]->cid * 4));
 	}
+	/* WP VF: user-defined DT 0x30 + DPCM 10-8-10, not RAW10 0x2B. */
+	msm_camera_io_w(0x00361230, csid_dev->base +
+		csid_dev->ctrl_reg->csid_reg.csid_cid_lut_vc_0_addr);
+	msm_camera_io_w(0x51, csid_dev->base +
+		csid_dev->ctrl_reg->csid_reg.csid_cid_n_cfg_addr);
+	msm_camera_io_w(0x22, csid_dev->base +
+		csid_dev->ctrl_reg->csid_reg.csid_cid_n_cfg_addr + 4);
+	msm_camera_io_w(0x22, csid_dev->base +
+		csid_dev->ctrl_reg->csid_reg.csid_cid_n_cfg_addr + 8);
+	pr_err("talkman_csid wp lut 0x%x cid0=0x%x cid1=0x%x cid2=0x%x\n",
+		msm_camera_io_r(csid_dev->base +
+		csid_dev->ctrl_reg->csid_reg.csid_cid_lut_vc_0_addr),
+		msm_camera_io_r(csid_dev->base +
+		csid_dev->ctrl_reg->csid_reg.csid_cid_n_cfg_addr),
+		msm_camera_io_r(csid_dev->base +
+		csid_dev->ctrl_reg->csid_reg.csid_cid_n_cfg_addr + 4),
+		msm_camera_io_r(csid_dev->base +
+		csid_dev->ctrl_reg->csid_reg.csid_cid_n_cfg_addr + 8));
 	return rc;
 }
 
@@ -153,12 +197,12 @@ static int msm_csid_config(struct csid_device *csid_dev,
 		return -EINVAL;
 	}
 
-	CDBG("%s csid_params, lane_cnt = %d, lane_assign = 0x%x\n",
-		__func__,
-		csid_params->lane_cnt,
-		csid_params->lane_assign);
-	CDBG("%s csid_params phy_sel = %d\n", __func__,
-		csid_params->phy_sel);
+	if (talkman_lane_assign >= 0)
+		csid_params->lane_assign = talkman_lane_assign;
+	pr_err("talkman_csid id=%d lanes=%u assign=0x%x phy_sel=%u usr_clk=%u override=0x%x\n",
+		csid_dev->pdev->id, csid_params->lane_cnt,
+		csid_params->lane_assign, csid_params->phy_sel,
+		csid_params->csi_clk, talkman_lane_assign);
 
 	msm_csid_reset(csid_dev);
 
@@ -170,6 +214,8 @@ static int msm_csid_config(struct csid_device *csid_dev,
 
 	clk_rate = (csid_params->csi_clk > 0) ?
 				(csid_params->csi_clk) : csid_dev->csid_max_clk;
+	if (clk_rate < 100000000)
+		clk_rate = csid_dev->csid_max_clk;
 	round_rate = clk_round_rate(csid_clk_ptr[csid_dev->csid_clk_index],
 					clk_rate);
 	if (round_rate > csid_dev->csid_max_clk)
@@ -182,7 +228,49 @@ static int msm_csid_config(struct csid_device *csid_dev,
 		pr_err("csi_src_clk set failed\n");
 		return rc;
 	}
+	{
+		int talkman_i;
+		unsigned long talkman_wp = 266670000;
 
+		/* DT names the RCG csi_clk (240 MHz). WP live is 266.67. */
+		for (talkman_i = 0; talkman_i < csid_dev->num_clk; talkman_i++) {
+			if (!csid_clk_info[talkman_i].clk_name ||
+			    strcmp(csid_clk_info[talkman_i].clk_name, "csi_clk"))
+				continue;
+			round_rate = clk_round_rate(csid_clk_ptr[talkman_i],
+						    talkman_wp);
+			rc = clk_set_rate(csid_clk_ptr[talkman_i], round_rate);
+			pr_err("talkman_csid wp csi_clk %lu round=%lu now=%lu rc=%d\n",
+				talkman_wp, round_rate,
+				clk_get_rate(csid_clk_ptr[talkman_i]), rc);
+			break;
+		}
+	}
+
+	if (talkman_tg > 0) {
+		uint32_t dt = 0x2b, bpl, tgv;
+
+		if (csid_params->lut_params.num_cid > 0 &&
+		    csid_params->lut_params.vc_cfg[0])
+			dt = csid_params->lut_params.vc_cfg[0]->dt;
+		/* CAF: 31:24 V blank, 23:13 H blank, 3:2 num DT, 1:0 VC.
+		 * WP 0x4008001c has bits 3:2 = 3. We used to write 0. */
+		tgv = ((0xFF & 0xFF) << 24) | ((0x400 & 0x7FF) << 13);
+		if (csid_params->lut_params.num_cid)
+			tgv |= (csid_params->lut_params.num_cid & 3) << 2;
+		msm_camera_io_w(tgv, csidbase +
+			csid_dev->ctrl_reg->csid_reg.csid_tg_vc_cfg_addr);
+		bpl = (talkman_tg_w * 10) / 8;
+		tgv = ((bpl & 0x1FFF) << 16) | (talkman_tg_h & 0x1FFF);
+		msm_camera_io_w(tgv, csidbase +
+			csid_dev->ctrl_reg->csid_reg.csid_tg_dt_n_cfg_0_addr);
+		msm_camera_io_w(dt & 0x3F, csidbase +
+			csid_dev->ctrl_reg->csid_reg.csid_tg_dt_n_cfg_1_addr);
+		msm_camera_io_w(talkman_tg_mode & 7, csidbase +
+			csid_dev->ctrl_reg->csid_reg.csid_tg_dt_n_cfg_2_addr);
+		pr_err("talkman_csid tg cfg %ux%u bpl=%u dt=0x%x mode=%d\n",
+			talkman_tg_w, talkman_tg_h, bpl, dt, talkman_tg_mode);
+	} else {
 	val = csid_params->lane_cnt - 1;
 	val |= csid_params->lane_assign <<
 		csid_dev->ctrl_reg->csid_reg.csid_dl_input_sel_shift;
@@ -195,16 +283,36 @@ static int msm_csid_config(struct csid_device *csid_dev,
 		csid_dev->ctrl_reg->csid_reg.csid_core_ctrl_0_addr);
 		val = csid_params->phy_sel <<
 			csid_dev->ctrl_reg->csid_reg.csid_phy_sel_shift;
-		val |= 0xF;
+		/* WP FUN_0041ddd4: phy_sel<<17 | 0x1000F (Linux only used 0xF). */
+		if (talkman_ctrl1_or >= 0)
+			val |= talkman_ctrl1_or;
+		else
+			val |= 0xF;
 		msm_camera_io_w(val, csidbase +
 		csid_dev->ctrl_reg->csid_reg.csid_core_ctrl_1_addr);
+		pr_err("talkman_csid ctrl0=0x%x ctrl1=0x%x or=0x%x\n",
+			msm_camera_io_r(csidbase +
+			csid_dev->ctrl_reg->csid_reg.csid_core_ctrl_0_addr),
+			val, talkman_ctrl1_or);
 	}
 
+	}
 	rc = msm_csid_cid_lut(&csid_params->lut_params, csid_dev);
 	if (rc < 0)
 		return rc;
 
 	msm_csid_set_debug_reg(csid_dev, csid_params);
+	if (talkman_tg > 0) {
+		msm_camera_io_w(0x00A06437, csidbase +
+			csid_dev->ctrl_reg->csid_reg.csid_tg_ctrl_addr);
+		pr_err("talkman_csid tg enable 0xa06437\n");
+	} else {
+		/* WP FUN_0041ddd4: TG_CTRL idle 0xa06436, never 0xa06437.
+		 * TG_CTRL=0 (#102/#105) killed PIX including PHY. */
+		msm_camera_io_w(0x00A06436, csidbase +
+			csid_dev->ctrl_reg->csid_reg.csid_tg_ctrl_addr);
+		pr_err("talkman_csid tg WP disable 0xa06436 (never on)\n");
+	}
 	return rc;
 }
 
@@ -219,8 +327,39 @@ static irqreturn_t msm_csid_irq(int irq_num, void *data)
 	}
 	irq = msm_camera_io_r(csid_dev->base +
 		csid_dev->ctrl_reg->csid_reg.csid_irq_status_addr);
-	CDBG("%s CSID%d_IRQ_STATUS_ADDR = 0x%x\n",
-		 __func__, csid_dev->pdev->id, irq);
+	if (irq) {
+		static int talkman_csid_stats;
+
+		pr_err_ratelimited("talkman_csid irq id=%d status=0x%x\n",
+			csid_dev->pdev->id, irq);
+		if ((irq & ~0x800) && talkman_csid_stats < 8) {
+			talkman_csid_stats++;
+			pr_err("talkman_csid stats n=%d pkts=0x%x ecc=0x%x crc=0x%x long=0x%x map=0x%x unmap=0x%x short=0x%x misr=0x%x/0x%x/0x%x/0x%x\n",
+				talkman_csid_stats,
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_stats_total_pkts_rcvd_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_stats_ecc_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_stats_crc_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_captured_long_pkt_hdr_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_captured_mmaped_long_pkt_hdr_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_captured_unmapped_long_pkt_hdr_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_captured_short_pkt_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_pif_misr_dl0_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_pif_misr_dl1_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_pif_misr_dl2_addr),
+				msm_camera_io_r(csid_dev->base +
+				csid_dev->ctrl_reg->csid_reg.csid_pif_misr_dl3_addr));
+		}
+	}
 	if (irq & (0x1 <<
 		csid_dev->ctrl_reg->csid_reg.csid_rst_done_irq_bitshift))
 		complete(&csid_dev->reset_complete);

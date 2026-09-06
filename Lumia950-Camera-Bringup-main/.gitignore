@@ -1,0 +1,9 @@
+kernel-smiapp-paths.txt
+*.tmp
+local-boot-backups/
+out/
+captures/
+scripts/remote-cam.env
+scripts/__pycache__/
+scripts/_sanitize_lab_paths.py
+scripts/_fix_overlay_concat.py

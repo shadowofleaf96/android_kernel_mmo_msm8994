@@ -22,6 +22,26 @@
 #include "msm.h"
 #include "msm_camera_io_util.h"
 
+static struct vfe_device *talkman_vfe_mid_dev;
+static void talkman_vfe_camif_mid(struct work_struct *w)
+{
+	static int n;
+	struct vfe_device *vfe_dev = talkman_vfe_mid_dev;
+	uint32_t st, extra;
+
+	if (!vfe_dev || !vfe_dev->vfe_base || n >= 8)
+		return;
+	(void)w;
+	n++;
+	st = msm_camera_io_r(vfe_dev->vfe_base + 0x31C);
+	extra = msm_camera_io_r(vfe_dev->vfe_base + 0x320);
+	pr_err("talkman_vfe camif mid n=%d st=0x%x extra=0x%x cmd=0x%x cfg=0x%x\n",
+		n, st, extra,
+		msm_camera_io_r(vfe_dev->vfe_base + 0x2F4),
+		msm_camera_io_r(vfe_dev->vfe_base + 0x2F8));
+}
+static DECLARE_DELAYED_WORK(talkman_vfe_camif_mid_w, talkman_vfe_camif_mid);
+
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
@@ -296,6 +316,22 @@ static void msm_vfe44_process_input_irq(struct vfe_device *vfe_dev,
 
 	if (irq_status0 & 0x1)
 		vfe_dev->axi_data.src_info[VFE_PIX_0].camif_sof_frame_id++;
+	if (irq_status0 & 0x3) {
+		static int talkman_vfe_camif_irq;
+
+		if (talkman_vfe_camif_irq < 8) {
+			talkman_vfe_camif_irq++;
+			pr_err("talkman_vfe camif irq n=%d s0=0x%x s1=0x%x sof=%d eof=%d fid=%u st=0x%x\n",
+				talkman_vfe_camif_irq, irq_status0, irq_status1,
+				!!(irq_status0 & 1), !!(irq_status0 & 2),
+				vfe_dev->axi_data.src_info[VFE_PIX_0].
+					camif_sof_frame_id,
+				msm_camera_io_r(vfe_dev->vfe_base + 0x31C));
+			talkman_vfe_mid_dev = vfe_dev;
+			mod_delayed_work(system_wq, &talkman_vfe_camif_mid_w,
+				msecs_to_jiffies(10));
+		}
+	}
 
 	if (vfe_dev->axi_data.src_info[VFE_PIX_0].camif_sof_frame_id == 0)
 		vfe_dev->axi_data.src_info[VFE_PIX_0].camif_sof_frame_id = 1;
@@ -385,6 +421,10 @@ static void msm_vfe44_process_error_status(struct vfe_device *vfe_dev)
 	if (error_status1 & (1 << 0)) {
 		pr_err("%s: camif error status: 0x%x\n",
 			__func__, vfe_dev->error_info.camif_status);
+		pr_err("talkman_vfe camif err cfg1c=0x%x in2e8=0x%x st=0x%x\n",
+			msm_camera_io_r(vfe_dev->vfe_base + 0x1C),
+			msm_camera_io_r(vfe_dev->vfe_base + 0x2E8),
+			vfe_dev->error_info.camif_status);
 		msm_camera_io_dump_2(vfe_dev->vfe_base + 0x2f4, 0x30);
 	}
 	if (error_status1 & (1 << 1))
@@ -583,6 +623,15 @@ static void msm_vfe44_process_epoch_irq(struct vfe_device *vfe_dev,
 		return;
 
 	if (irq_status0 & BIT(2)) {
+		static int talkman_vfe_epoch;
+
+		if (talkman_vfe_epoch < 8) {
+			talkman_vfe_epoch++;
+			pr_err("talkman_vfe camif EPOCH0 n=%d s0=0x%x fid=%u\n",
+				talkman_vfe_epoch, irq_status0,
+				vfe_dev->axi_data.src_info[VFE_PIX_0].
+					camif_sof_frame_id);
+		}
 		msm_isp_notify(vfe_dev, ISP_EVENT_SOF, VFE_PIX_0, ts);
 		ISP_DBG("%s: EPOCH0 IRQ\n", __func__);
 		msm_isp_update_framedrop_reg(vfe_dev, VFE_PIX_0);
@@ -1068,14 +1117,40 @@ static void msm_vfe44_cfg_camif(struct vfe_device *vfe_dev,
 	subsample_period = camif_cfg->subsample_cfg.irq_subsample_period;
 	subsample_pattern = camif_cfg->subsample_cfg.irq_subsample_pattern;
 
-	msm_camera_io_w(camif_cfg->lines_per_frame << 16 |
-		camif_cfg->pixels_per_line, vfe_dev->vfe_base + 0x300);
+	{
+		uint32_t talkman_ppl = camif_cfg->pixels_per_line;
+		uint32_t talkman_lpf = camif_cfg->lines_per_frame;
+
+		if (talkman_ppl == 4080) {
+			talkman_ppl = 2496;
+			talkman_lpf = 1872;
+		}
+		first_pixel = 0;
+		last_pixel = talkman_ppl - 1;
+		first_line = 0;
+		last_line = talkman_lpf ? talkman_lpf - 1 : 0;
+		pr_err("talkman_vfe camif ff0b ppl %u -> %u lpf=%u win=%u..%u x %u..%u\n",
+			camif_cfg->pixels_per_line, talkman_ppl, talkman_lpf,
+			first_pixel, last_pixel, first_line, last_line);
+		msm_camera_io_w(talkman_lpf << 16 |
+			talkman_ppl, vfe_dev->vfe_base + 0x300);
+	}
 
 	msm_camera_io_w(first_pixel << 16 | last_pixel,
 	vfe_dev->vfe_base + 0x304);
 
 	msm_camera_io_w(first_line << 16 | last_line,
 	vfe_dev->vfe_base + 0x308);
+	pr_err("talkman_vfe camif clk=%ld mux=%u pat=%u in=%u %ux%u win=%u..%u x %u..%u hbi=%u\n",
+		vfe_dev->axi_data.src_info[VFE_PIX_0].pixel_clock,
+		pix_cfg->input_mux, pix_cfg->pixel_pattern,
+		camif_cfg->camif_input,
+		camif_cfg->pixels_per_line, camif_cfg->lines_per_frame,
+		first_pixel, last_pixel, first_line, last_line,
+		camif_cfg->hbi_cnt);
+	/* V40 CAMIF blob: 0x2FC = EFS. CAF v2 left it 0. */
+	msm_camera_io_w(0x00200040, vfe_dev->vfe_base + 0x2FC);
+	pr_err("talkman_vfe camif efs 0x2fc=0x00200040 (eol=64 eof=32)\n");
 	if (subsample_period && subsample_pattern) {
 		val = msm_camera_io_r(vfe_dev->vfe_base + 0x2F8);
 		val &= 0xFFE0FFFF;
@@ -1091,7 +1166,9 @@ static void msm_vfe44_cfg_camif(struct vfe_device *vfe_dev,
 	}
 	val = msm_camera_io_r(vfe_dev->vfe_base + 0x2E8);
 	val |= camif_cfg->camif_input;
+	val = 0x3;
 	msm_camera_io_w(val, vfe_dev->vfe_base + 0x2E8);
+	pr_err("talkman_vfe camif 0x2e8=0x3 (MIPI_EN, no RDI_EN)\n");
 
 }
 
@@ -1127,9 +1204,11 @@ static void msm_vfe44_update_camif_state(struct vfe_device *vfe_dev,
 		msm_camera_io_w_mb(0x1, vfe_dev->vfe_base + 0x24);
 
 		val = msm_camera_io_r(vfe_dev->vfe_base + 0x28);
-		val |= 0xF5;
+		val |= 0xF7;
 		msm_camera_io_w_mb(val, vfe_dev->vfe_base + 0x28);
+		pr_err("talkman_vfe camif irq mask0=0x%x (EOF unmasked)\n", val);
 		msm_camera_io_w_mb(0x140000, vfe_dev->vfe_base + 0x318);
+		pr_err("talkman_vfe camif epoch0=20\n");
 
 		bus_en =
 			((vfe_dev->axi_data.

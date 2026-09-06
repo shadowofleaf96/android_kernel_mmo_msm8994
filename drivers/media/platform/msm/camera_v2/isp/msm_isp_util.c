@@ -466,7 +466,64 @@ static inline int msm_isp_process_event_subscription(struct v4l2_fh *fh,
 int msm_isp_subscribe_event(struct v4l2_subdev *sd, struct v4l2_fh *fh,
 	struct v4l2_event_subscription *sub)
 {
-	return msm_isp_process_event_subscription(fh, sub, true);
+	struct vfe_device *vfe_dev = v4l2_get_subdevdata(sd);
+	int rc = 0;
+	{
+		static unsigned n;
+
+		if (n < 8) {
+			n++;
+			pr_err("talkman_vfe subscribe n=%u type=0x%x id=%u flags=0x%x\n",
+				n, sub->type, sub->id, sub->flags);
+		}
+	}
+	rc = v4l2_event_subscribe(fh, sub, MAX_ISP_V4l2_EVENTS, NULL);
+	if (rc == 0) {
+		if (sub->type == V4L2_EVENT_ALL ||
+		    sub->type < ISP_EVENT_BASE) {
+			int i;
+
+			vfe_dev->axi_data.event_mask = 0;
+			for (i = 0; i < ISP_EVENT_MAX; i++)
+				vfe_dev->axi_data.event_mask |= (1 << i);
+		} else {
+			int event_idx = sub->type - ISP_EVENT_BASE;
+
+			vfe_dev->axi_data.event_mask |= (1 << event_idx);
+		}
+	}
+	/* HAL 0x1ff is a bitmask. Keep it subscribed so ioctl stays 0. */
+	if (rc == 0 && sub->type && sub->type < ISP_EVENT_BASE) {
+		struct v4l2_event_subscription extra = *sub;
+		unsigned interface;
+		unsigned stream;
+		int extra_rc;
+
+		for (interface = 0; interface < VFE_SRC_MAX; interface++) {
+			extra.type = ISP_EVENT_SOF | interface;
+			extra_rc = v4l2_event_subscribe(fh, &extra,
+				MAX_ISP_V4l2_EVENTS, NULL);
+			if (extra_rc)
+				pr_err("talkman_vfe extra SOF|%u rc=%d\n",
+					interface, extra_rc);
+		}
+		extra.type = ISP_EVENT_BUF_DONE;
+		extra_rc = v4l2_event_subscribe(fh, &extra,
+			MAX_ISP_V4l2_EVENTS, NULL);
+		if (extra_rc)
+			pr_err("talkman_vfe extra BUF_DONE rc=%d\n", extra_rc);
+		for (stream = 0; stream < MAX_NUM_STREAM; stream++) {
+			extra.type = ISP_EVENT_BUF_DIVERT + stream;
+			extra_rc = v4l2_event_subscribe(fh, &extra,
+				MAX_ISP_V4l2_EVENTS, NULL);
+			if (extra_rc)
+				pr_err("talkman_vfe extra DIVERT+%u rc=%d\n",
+					stream, extra_rc);
+		}
+		pr_err("talkman_vfe extra SOF+BUF_DONE+DIVERT after mask 0x%x rc0=%d\n",
+			sub->type, rc);
+	}
+	return rc;
 }
 
 int msm_isp_unsubscribe_event(struct v4l2_subdev *sd, struct v4l2_fh *fh,
@@ -613,6 +670,11 @@ int msm_isp_cfg_pix(struct vfe_device *vfe_dev,
 
 	vfe_dev->axi_data.src_info[VFE_PIX_0].pixel_clock =
 		input_cfg->input_pix_clk;
+	if (vfe_dev->axi_data.src_info[VFE_PIX_0].pixel_clock != 600000000) {
+		pr_err("talkman_vfe pixclk %ld -> 600000000\n",
+			vfe_dev->axi_data.src_info[VFE_PIX_0].pixel_clock);
+		vfe_dev->axi_data.src_info[VFE_PIX_0].pixel_clock = 600000000;
+	}
 	vfe_dev->axi_data.src_info[VFE_PIX_0].input_mux =
 		input_cfg->d.pix_cfg.input_mux;
 	vfe_dev->axi_data.src_info[VFE_PIX_0].input_format =
@@ -870,11 +932,18 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 		rc = msm_isp_release_axi_stream(vfe_dev, arg);
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
-	case VIDIOC_MSM_ISP_CFG_STREAM:
+	case VIDIOC_MSM_ISP_CFG_STREAM: {
+		struct msm_vfe_axi_stream_cfg_cmd *c = arg;
+
+		if (c)
+			pr_err("talkman_isp CFG_STREAM n=%u cmd=%u h0=0x%x\n",
+				c->num_streams, c->cmd,
+				c->num_streams ? c->stream_handle[0] : 0);
 		mutex_lock(&vfe_dev->core_mutex);
 		rc = msm_isp_cfg_axi_stream(vfe_dev, arg);
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
+	}
 	case VIDIOC_MSM_ISP_AXI_HALT:
 		mutex_lock(&vfe_dev->core_mutex);
 		rc = msm_isp_axi_halt(vfe_dev, arg);
@@ -956,8 +1025,9 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 		break;
 
 	default:
-		pr_err_ratelimited("%s: Invalid ISP command %d\n", __func__,
-				    cmd);
+		pr_err_ratelimited(
+			"%s: Invalid ISP command %d nr=%u size=%u\n",
+			__func__, cmd, _IOC_NR(cmd), _IOC_SIZE(cmd));
 		rc = -EINVAL;
 	}
 	return rc;
@@ -1756,6 +1826,9 @@ static void msm_isp_process_overflow_irq(
 
 	if (overflow_mask) {
 		struct msm_isp_event_data error_event;
+
+		pr_err("talkman_vfe overflow mask=0x%x s0=0x%x s1=0x%x\n",
+			overflow_mask, *irq_status0, *irq_status1);
 
 		if (vfe_dev->reset_pending == 1) {
 			pr_err("%s:%d failed: overflow %x during reset\n",

@@ -1,0 +1,145 @@
+/*
+ * talkman cameras — SMIA++ MSM sensor (smiapp ident).
+ *
+ * Snaccy: WP modules are SMIA++; qcamera talks to Nokia X2 qcom,smia65pp;
+ * rear HAL name is imx230; one s_ctrl per node; Hill first (front/iris
+ * crashed him as a static singleton). 3.10 VIDEO_SMIAPP cannot bind CCI
+ * children. ice5lp_2k is the USB-C UC120 FPGA, not a camera part.
+ *
+ * msm-cci.txt: `reg` is the 8-bit I2C address. Two 0x20 slaves cannot both
+ * be named "cam" (of_device_make_bus_id is $reg.$name) → cam0@0 / cam1@1.
+ *
+ * ACPI camera.asl (not camera_mtp.asl):
+ *   Hill CAMS  CCI1 CSI0 GPIO 13/92/91  L23 2.85 + L29 2.85 + L25 1.15 + LVS1 1.8
+ *   Front CAMF CCI0 CSI2 GPIO 15/104/105 L17 2.80 + LVS1
+ *   Iris CAMT  CCI0 CSI3 GPIO 14/102/106 L17 + L3 + LVS1, 8-bit 0x6C
+ * CAMP F0 muxes CCI1 onto GPIO 19/20 (cci1_active). CCI0 on 17/18 is
+ * Qualcomm default; talkman CAMP uses 17/18 as extra MCLKs, rear MCLK is 13.
+ *
+ * snaccy lumia/camera.dtsi swapped VIO/VAF names (L23 as vio, LVS1 as vaf).
+ * Follow ACPI: LVS1 is shared 1.8V VIO — enable and never disable.
+ * L23 is extra 2.85V (cam_vaf here). Do not put LVS1 in power_setting.
+ *
+ * smia-msm #16: delayed qcamera register + g_sctrl slot after Hill ident.
+ * Front/iris stay disabled. Do not put LVS1 in cam-vreg-name.
+ */
+
+&cci {
+	/* msm8992-camera.dtsi already sets this; keep CCI1 (19/20) muxed. */
+	pinctrl-names = "cci_default", "cci_suspend";
+	pinctrl-0 = <&cci0_active &cci1_active>;
+	pinctrl-1 = <&cci0_suspend &cci1_suspend>;
+
+	/* Rear PureView 20MP (Hill) — CCI master 1, CSI0, 8-bit 0x20 */
+	cam0: cam0@0 {
+		compatible = "qcom,smia65pp";
+		cell-index = <0>;
+		reg = <0x20>;
+		qcom,slave-id = <0x20 0x0000 0>;
+		qcom,csiphy-sd-index = <0>;
+		qcom,csid-sd-index = <0>;
+		qcom,mount-angle = <90>;
+		qcom,sensor-name = "imx230";
+		qcom,sensor-position = <0>;
+		qcom,sensor-mode = <0>;
+		qcom,cci-master = <1>;
+		cam_vdig-supply = <&pm8994_l25>;
+		cam_vana-supply = <&pm8994_l29>;
+		cam_vio-supply = <&pm8994_lvs1>;
+		/* ACPI CAMS D0 LDO23 2.85V. Not LVS1 (snaccy name-swap). */
+		cam_vaf-supply = <&pm8994_l23>;
+		/* No cam_vio here: get_dt_data would put LVS1 in power_down. */
+		qcom,cam-vreg-name = "cam_vdig", "cam_vana", "cam_vaf";
+		qcom,cam-vreg-type = <0 0 0>;
+		qcom,cam-vreg-min-voltage = <1150000 2850000 2850000>;
+		qcom,cam-vreg-max-voltage = <1150000 2850000 2850000>;
+		qcom,cam-vreg-op-mode = <100000 100000 100000>;
+		qcom,gpio-no-mux = <0>;
+		/* 0x4320: DL={0,2,3,4}, clock=phy1. #48 0x3210 stole the clock
+		 * pin (pkts=0, irq 0xd000dd). Kernel may override to 0x0234. */
+		qcom,csi-lane-assign = <0x4320>;
+		qcom,csi-lane-mask = <0x1F>;
+		pinctrl-names = "cam_default", "cam_suspend";
+		/* Core auto-applies only "default". Ident selects cam_default
+		 * (GPIO 13 func 1 = MCLK). #13 left gp-13 unclaimed. */
+		pinctrl-0 = <&cam_sensor_mclk0_active &cam_sensor_rear_active>;
+		pinctrl-1 = <&cam_sensor_mclk0_suspend &cam_sensor_rear_suspend>;
+		gpios = <&msm_gpio 13 0>,
+			<&msm_gpio 92 0>,
+			<&msm_gpio 91 0>;
+		qcom,gpio-reset = <1>;
+		qcom,gpio-standby = <2>;
+		qcom,gpio-req-tbl-num = <0 1 2>;
+		qcom,gpio-req-tbl-flags = <1 0 0>;
+		qcom,gpio-req-tbl-label = "CAMIF_MCLK0",
+					  "CAM_RESET0",
+					  "CAM_STANDBY0";
+		/* ACPI CAMSENSOR_1_STANBY (no _N): 0 = out of standby. */
+		qcom,standby-release = <0>;
+		clocks = <&clock_mmss clk_mclk0_clk_src>,
+			 <&clock_mmss clk_camss_mclk0_clk>;
+		clock-names = "cam_src_clk", "cam_clk";
+		status = "ok";
+	};
+
+	/* Front 5MP (Ducati) — disabled this flash (snaccy: Hill first). */
+	cam1: cam1@1 {
+		compatible = "qcom,smia65pp";
+		cell-index = <1>;
+		reg = <0x20>;
+		qcom,slave-id = <0x20 0x0000 0>;
+		qcom,csiphy-sd-index = <2>;
+		qcom,csid-sd-index = <2>;
+		qcom,mount-angle = <90>;
+		qcom,sensor-name = "ducati";
+		qcom,sensor-position = <1>;
+		qcom,sensor-mode = <0>;
+		qcom,cci-master = <0>;
+		cam_vana-supply = <&pm8994_l17>;
+		cam_vio-supply = <&pm8994_lvs1>;
+		pinctrl-names = "cam_default", "cam_suspend";
+		pinctrl-0 = <&cam_sensor_mclk2_active &cam_sensor_front_active>;
+		pinctrl-1 = <&cam_sensor_mclk2_suspend &cam_sensor_front_suspend>;
+		gpios = <&msm_gpio 15 0>,
+			<&msm_gpio 104 0>,
+			<&msm_gpio 105 0>;
+		qcom,gpio-reset = <1>;
+		qcom,gpio-standby = <2>;
+		qcom,standby-release = <1>;
+		clocks = <&clock_mmss clk_mclk2_clk_src>,
+			 <&clock_mmss clk_camss_mclk2_clk>;
+		clock-names = "cam_src_clk", "cam_clk";
+		status = "disabled";
+	};
+
+	/* Iris — disabled this flash. 8-bit 0x6C from snaccy, not live-dumped. */
+	cam2: cam2@2 {
+		compatible = "qcom,smia65pp";
+		cell-index = <2>;
+		reg = <0x6c>;
+		qcom,slave-id = <0x6c 0x0000 0>;
+		qcom,csiphy-sd-index = <1>;
+		qcom,csid-sd-index = <3>;
+		qcom,mount-angle = <90>;
+		qcom,sensor-name = "iris";
+		qcom,sensor-position = <2>;
+		qcom,sensor-mode = <0>;
+		qcom,cci-master = <0>;
+		cam_vdig-supply = <&pm8994_l3>;
+		cam_vana-supply = <&pm8994_l17>;
+		cam_vio-supply = <&pm8994_lvs1>;
+		pinctrl-names = "cam_default", "cam_suspend";
+		pinctrl-0 = <&cam_sensor_mclk1_active>;
+		pinctrl-1 = <&cam_sensor_mclk1_suspend>;
+		gpios = <&msm_gpio 14 0>,
+			<&msm_gpio 102 0>,
+			<&msm_gpio 106 0>;
+		qcom,gpio-reset = <1>;
+		qcom,gpio-standby = <2>;
+		qcom,standby-release = <0>;
+		clocks = <&clock_mmss clk_mclk1_clk_src>,
+			 <&clock_mmss clk_camss_mclk1_clk>;
+		clock-names = "cam_src_clk", "cam_clk";
+		status = "disabled";
+	};
+};

@@ -29,6 +29,43 @@ static struct v4l2_file_operations msm_sensor_v4l2_subdev_fops;
 /* Static declaration */
 static struct msm_sensor_ctrl_t *g_sctrl[MAX_CAMERAS];
 
+int msm_sensor_driver_bind_probed(struct msm_sensor_ctrl_t *s_ctrl,
+				  uint16_t sensor_id)
+{
+	struct msm_camera_sensor_slave_info *cam;
+
+	if (!s_ctrl || !s_ctrl->sensordata)
+		return -EINVAL;
+	if (s_ctrl->id >= MAX_CAMERAS) {
+		pr_err("talkman_smia: bind slot id %u out of range\n",
+		       s_ctrl->id);
+		return -EINVAL;
+	}
+	if (g_sctrl[s_ctrl->id] && g_sctrl[s_ctrl->id] != s_ctrl) {
+		pr_err("talkman_smia: g_sctrl[%u] already taken\n", s_ctrl->id);
+		return -EBUSY;
+	}
+
+	cam = s_ctrl->sensordata->cam_slave_info;
+	if (!cam) {
+		cam = kzalloc(sizeof(*cam), GFP_KERNEL);
+		if (!cam)
+			return -ENOMEM;
+		s_ctrl->sensordata->cam_slave_info = cam;
+	}
+	if (s_ctrl->sensordata->sensor_name)
+		strlcpy(cam->sensor_name, s_ctrl->sensordata->sensor_name,
+			sizeof(cam->sensor_name));
+	cam->sensor_id_info.sensor_id = sensor_id;
+	s_ctrl->is_probe_succeed = 1;
+	g_sctrl[s_ctrl->id] = s_ctrl;
+	pr_err("talkman_smia: g_sctrl[%u]=%s id=0x%04x (CFG_SINIT_PROBE slot)\n",
+	       s_ctrl->id, cam->sensor_name, sensor_id);
+	return 0;
+}
+EXPORT_SYMBOL(msm_sensor_driver_bind_probed);
+
+
 static int msm_sensor_platform_remove(struct platform_device *pdev)
 {
 	struct msm_sensor_ctrl_t  *s_ctrl;

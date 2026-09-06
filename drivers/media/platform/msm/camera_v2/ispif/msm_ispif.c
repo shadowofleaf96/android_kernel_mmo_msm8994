@@ -1038,10 +1038,16 @@ static void ispif_process_irq(struct ispif_device *ispif,
 	if (out[vfe_id].ispifIrqStatus0 &
 			ISPIF_IRQ_STATUS_PIX_SOF_MASK) {
 		ispif->sof_count[vfe_id].sof_cnt[PIX0]++;
+		pr_err_ratelimited("talkman_ispif PIX SOF vfe=%d n=%u st0=0x%x\n",
+			vfe_id, ispif->sof_count[vfe_id].sof_cnt[PIX0],
+			out[vfe_id].ispifIrqStatus0);
 	}
 	if (out[vfe_id].ispifIrqStatus0 &
 			ISPIF_IRQ_STATUS_RDI0_SOF_MASK) {
 		ispif->sof_count[vfe_id].sof_cnt[RDI0]++;
+		pr_err_ratelimited("talkman_ispif RDI0 SOF vfe=%d n=%u st0=0x%x\n",
+			vfe_id, ispif->sof_count[vfe_id].sof_cnt[RDI0],
+			out[vfe_id].ispifIrqStatus0);
 	}
 	if (out[vfe_id].ispifIrqStatus1 &
 			ISPIF_IRQ_STATUS_RDI1_SOF_MASK) {

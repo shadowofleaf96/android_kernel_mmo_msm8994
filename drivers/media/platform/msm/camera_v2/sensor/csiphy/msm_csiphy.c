@@ -11,6 +11,7 @@
  */
 
 #include <linux/delay.h>
+#include <linux/workqueue.h>
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/of.h>
@@ -26,6 +27,61 @@
 #include "include/msm_csiphy_3_2_hwreg.h"
 
 #define DBG_CSIPHY 0
+
+/* #49: 0x0234 == 0x4320 (pkts+ECC). Try longer HS-settle. HAL 0x1b is 135ns
+ * @ 200 MHz; 0x28 is 200ns. echo -1 leaves the HAL value. */
+static int talkman_settle = 0x23;
+module_param_named(settle, talkman_settle, int, 0644);
+MODULE_PARM_DESC(settle, "CSIPHY settle_cnt; -1 = leave HAL value");
+
+/* 20nm lnn_misc1 lane-id uses 0x4 (clk) / 0x8|n (data). Bit 0 is unused.
+ * OR 1 on every enabled lane = try P/N invert. echo 0 to disable. */
+static int talkman_pn_invert = 0;
+module_param_named(pn_invert, talkman_pn_invert, int, 0644);
+MODULE_PARM_DESC(pn_invert, "OR 1 into CSIPHY 20nm lnn_misc1 (P/N invert)");
+
+static struct csiphy_device *talkman_late_csiphy;
+static void talkman_csiphy_late_fn(struct work_struct *w);
+static DECLARE_DELAYED_WORK(talkman_csiphy_late, talkman_csiphy_late_fn);
+
+static void talkman_csiphy_late_fn(struct work_struct *w)
+{
+	struct csiphy_device *d = talkman_late_csiphy;
+	void __iomem *base;
+	int j;
+
+	if (!d || !d->base)
+		return;
+	base = d->base;
+	pr_err("talkman_csiphy late irq 0=0x%x 1=0x%x 2=0x%x 3=0x%x 4=0x%x mask0=0x%x pwr=0x%x\n",
+		msm_camera_io_r(base + 0x18c),
+		msm_camera_io_r(base + 0x190),
+		msm_camera_io_r(base + 0x194),
+		msm_camera_io_r(base + 0x198),
+		msm_camera_io_r(base + 0x19c),
+		msm_camera_io_r(base + 0x1ac),
+		msm_camera_io_r(base +
+			d->ctrl_reg->csiphy_reg.mipi_csiphy_glbl_pwr_cfg_addr));
+	for (j = 0; j < 5; j++) {
+		void __iomem *ln = base + 0x40 * j;
+
+		pr_err("talkman_csiphy late j=%d 00=0x%x 04=0x%x 08=0x%x 0c=0x%x 10=0x%x 20=0x%x 28=0x%x\n",
+			j,
+			msm_camera_io_r(ln + 0x00),
+			msm_camera_io_r(ln + 0x04),
+			msm_camera_io_r(ln + 0x08),
+			msm_camera_io_r(ln + 0x0c),
+			msm_camera_io_r(ln + 0x10),
+			msm_camera_io_r(ln + 0x20),
+			msm_camera_io_r(ln + 0x28));
+	}
+}
+
+/* #63 half CSI same EOT+ECC. cfg4 reset is 0x5; clear bit 0. */
+static int talkman_cfg4_clr0 = 0;
+module_param_named(cfg4_clr0, talkman_cfg4_clr0, int, 0644);
+MODULE_PARM_DESC(cfg4_clr0, "Clear CSIPHY LNn_CFG4 bit 0");
+
 
 #define V4L2_IDENT_CSIPHY                        50003
 #define CSIPHY_VERSION_V22                        0x01
@@ -85,24 +141,88 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 	clk_rate = (csiphy_params->csiphy_clk > 0)
 			? csiphy_params->csiphy_clk :
 			csiphy_dev->csiphy_max_clk;
+	/* smia7 advertises 53.1 MHz vt. That is below CSIPHY timer min. */
+	if (clk_rate < 100000000)
+		clk_rate = csiphy_dev->csiphy_max_clk;
 	round_rate = clk_round_rate(
 			csid_phy_clk_ptr[csiphy_dev->csiphy_clk_index],
 			clk_rate);
 	if (round_rate >= csiphy_dev->csiphy_max_clk)
 		round_rate = csiphy_dev->csiphy_max_clk;
-	else {
+	else if (round_rate) {
 		ratio = csiphy_dev->csiphy_max_clk/round_rate;
-		csiphy_params->settle_cnt = csiphy_params->settle_cnt/ratio;
+		if (ratio > 1)
+			csiphy_params->settle_cnt =
+				csiphy_params->settle_cnt / ratio;
 	}
+	if (csiphy_params->settle_cnt < 8)
+		csiphy_params->settle_cnt = 0x0E;
+	if (talkman_settle >= 0)
+		csiphy_params->settle_cnt = talkman_settle;
 
-	CDBG("set from usr csiphy_clk clk_rate = %u round_rate = %u\n",
-			clk_rate, round_rate);
+	pr_err("talkman_csiphy id=%d lanes=%u mask=0x%x settle=0x%x combo=%u csid=%u usr_clk=%u use=%u round=%u hw=0x%x nm20=%d\n",
+		csiphy_id, csiphy_params->lane_cnt,
+		csiphy_params->lane_mask, csiphy_params->settle_cnt,
+		csiphy_params->combo_mode, csiphy_params->csid_core,
+		csiphy_params->csiphy_clk, clk_rate, round_rate,
+		csiphy_dev->hw_version, csiphy_dev->is_3_1_20nm_hw);
 	rc = clk_set_rate(
 		csid_phy_clk_ptr[csiphy_dev->csiphy_clk_index],
 		round_rate);
 	if (rc < 0) {
 		pr_err("csiphy_timer_src_clk set failed\n");
 		return rc;
+	}
+	{
+		void __iomem *cgc = ioremap(0xFDA00000, 0x50);
+		void __iomem *mmcc = ioremap(0xFD8C3000, 0x800);
+		void __iomem *tcsr = ioremap(0xFD512028, 4);
+
+		if (cgc) {
+			pr_err("talkman_cgc before 00=%x 10=%x 20=%x 24=%x 28=%x 2c=%x 30=%x 34=%x 38=%x 3c=%x 40=%x 44=%x\n",
+				msm_camera_io_r(cgc),
+				msm_camera_io_r(cgc + 0x10),
+				msm_camera_io_r(cgc + 0x20),
+				msm_camera_io_r(cgc + 0x24),
+				msm_camera_io_r(cgc + 0x28),
+				msm_camera_io_r(cgc + 0x2c),
+				msm_camera_io_r(cgc + 0x30),
+				msm_camera_io_r(cgc + 0x34),
+				msm_camera_io_r(cgc + 0x38),
+				msm_camera_io_r(cgc + 0x3c),
+				msm_camera_io_r(cgc + 0x40),
+				msm_camera_io_r(cgc + 0x44));
+			/* WP VF enables. Mux stays 0. */
+			msm_camera_io_w(0xf, cgc + 0x24);
+			msm_camera_io_w(0x3f, cgc + 0x2c);
+			msm_camera_io_w(3, cgc + 0x34);
+			msm_camera_io_w(3, cgc + 0x3c);
+			msm_camera_io_w(3, cgc + 0x44);
+			mb();
+			pr_err("talkman_cgc after 24=%x 2c=%x 34=%x 3c=%x 44=%x\n",
+				msm_camera_io_r(cgc + 0x24),
+				msm_camera_io_r(cgc + 0x2c),
+				msm_camera_io_r(cgc + 0x34),
+				msm_camera_io_r(cgc + 0x3c),
+				msm_camera_io_r(cgc + 0x44));
+			iounmap(cgc);
+		} else
+			pr_err("talkman_cgc ioremap fail\n");
+		if (mmcc) {
+			pr_err("talkman_mmcc phy=%x csi0=%x csi0_cbcr=%x csi_vfe0=%x vfe0=%x mclk0=%x\n",
+				msm_camera_io_r(mmcc + 0x4),
+				msm_camera_io_r(mmcc + 0x94),
+				msm_camera_io_r(mmcc + 0xb4),
+				msm_camera_io_r(mmcc + 0x704),
+				msm_camera_io_r(mmcc + 0x604),
+				msm_camera_io_r(mmcc + 0x364));
+			iounmap(mmcc);
+		}
+		if (tcsr) {
+			pr_err("talkman_tcsr fd512028=%x (WP 009690e1)\n",
+				msm_camera_io_r(tcsr));
+			iounmap(tcsr);
+		}
 	}
 
 	CDBG("%s csiphy_params, mask = 0x%x cnt = %d\n",
@@ -179,6 +299,15 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 		msm_camera_io_w(csiphy_params->settle_cnt,
 			csiphybase + csiphy_dev->ctrl_reg->csiphy_reg.
 			mipi_csiphy_lnn_cfg3_addr + 0x40*j);
+		/* WP live Hill CFG3=0x16 (Linux settle 0x23). */
+		msm_camera_io_w(0x16, csiphybase +
+			csiphy_dev->ctrl_reg->csiphy_reg.
+			mipi_csiphy_lnn_cfg3_addr + 0x40*j);
+		pr_err("talkman_csiphy wp cfg3 j=%d settle=0x%x now=0x%x\n",
+			j, csiphy_params->settle_cnt,
+			msm_camera_io_r(csiphybase +
+			csiphy_dev->ctrl_reg->csiphy_reg.
+			mipi_csiphy_lnn_cfg3_addr + 0x40*j));
 		msm_camera_io_w(csiphy_dev->ctrl_reg->csiphy_reg.
 			mipi_csiphy_interrupt_mask_val, csiphybase +
 			csiphy_dev->ctrl_reg->csiphy_reg.
@@ -213,17 +342,107 @@ static int msm_csiphy_lane_config(struct csiphy_device *csiphy_dev,
 						0x18) == 0x18))
 					lane_val = 0x4;
 			}
+			/* 0=off 1=all (same as off on a differential link)
+			 * 2=clock only (misc1 0x4) 3=data only (misc1 bit3). */
+			if (talkman_pn_invert == 1 ||
+			    (talkman_pn_invert == 2 && lane_val == 0x4) ||
+			    (talkman_pn_invert == 3 && (lane_val & 0x8)))
+				lane_val |= 0x1;
+			pr_err("talkman_csiphy ln j=%d misc1=0x%x pn=%d\n",
+				j, lane_val, talkman_pn_invert);
 			msm_camera_io_w(lane_val, csiphybase +
 				csiphy_dev->ctrl_reg->csiphy_reg.
 				mipi_csiphy_lnn_misc1_addr + 0x40*j);
 			msm_camera_io_w(0x17, csiphybase +
 				csiphy_dev->ctrl_reg->csiphy_reg.
 				mipi_csiphy_lnn_test_imp + 0x40*j);
+			if (talkman_cfg4_clr0) {
+				uint32_t c4 = msm_camera_io_r(csiphybase +
+					csiphy_dev->ctrl_reg->csiphy_reg.
+					mipi_csiphy_lnn_cfg4_addr + 0x40*j);
+
+				msm_camera_io_w(0, csiphybase +
+					csiphy_dev->ctrl_reg->csiphy_reg.
+					mipi_csiphy_lnn_cfg4_addr + 0x40*j);
+			}
+			{
+				uint32_t c4 = msm_camera_io_r(csiphybase +
+					csiphy_dev->ctrl_reg->csiphy_reg.
+					mipi_csiphy_lnn_cfg4_addr + 0x40*j);
+				uint32_t c5 = msm_camera_io_r(csiphybase +
+					csiphy_dev->ctrl_reg->csiphy_reg.
+					mipi_csiphy_lnn_cfg5_addr + 0x40*j);
+
+				/* WP live Hill: CFG4=0xff CFG5=0x22. */
+				msm_camera_io_w(0xff, csiphybase +
+					csiphy_dev->ctrl_reg->csiphy_reg.
+					mipi_csiphy_lnn_cfg4_addr + 0x40*j);
+				msm_camera_io_w(0x22, csiphybase +
+					csiphy_dev->ctrl_reg->csiphy_reg.
+					mipi_csiphy_lnn_cfg5_addr + 0x40*j);
+				{
+					uint32_t c2 = msm_camera_io_r(
+						csiphybase +
+						csiphy_dev->ctrl_reg->
+						csiphy_reg.
+						mipi_csiphy_lnn_cfg2_addr +
+						0x40*j);
+
+					msm_camera_io_w(0x3f, csiphybase +
+						csiphy_dev->ctrl_reg->
+						csiphy_reg.
+						mipi_csiphy_lnn_cfg2_addr +
+						0x40*j);
+					pr_err("talkman_csiphy wp cfg2 j=%d was=0x%x now=0x%x\n",
+						j, c2, msm_camera_io_r(
+						csiphybase +
+						csiphy_dev->ctrl_reg->
+						csiphy_reg.
+						mipi_csiphy_lnn_cfg2_addr +
+						0x40*j));
+				}
+				pr_err("talkman_csiphy wp analog j=%d cfg4 was=0x%x now=0x%x cfg5 was=0x%x now=0x%x\n",
+					j, c4, msm_camera_io_r(csiphybase +
+					csiphy_dev->ctrl_reg->csiphy_reg.
+					mipi_csiphy_lnn_cfg4_addr + 0x40*j),
+					c5, msm_camera_io_r(csiphybase +
+					csiphy_dev->ctrl_reg->csiphy_reg.
+					mipi_csiphy_lnn_cfg5_addr + 0x40*j));
+			}
 			curr_lane++;
 		}
 		j++;
 		lane_mask >>= 1;
 	}
+	/* 20nm lane block is 0x40, not newer 2PH 0x200+CTRL9. Dump analog. */
+	for (j = 0; j < 5; j++) {
+		void __iomem *ln = csiphybase + 0x40 * j;
+
+		pr_err("talkman_csiphy dump j=%d 00=0x%x 04=0x%x 08=0x%x 0c=0x%x 10=0x%x 14=0x%x 18=0x%x 1c=0x%x 20=0x%x 28=0x%x 2c=0x%x\n",
+			j,
+			msm_camera_io_r(ln + 0x00),
+			msm_camera_io_r(ln + 0x04),
+			msm_camera_io_r(ln + 0x08),
+			msm_camera_io_r(ln + 0x0c),
+			msm_camera_io_r(ln + 0x10),
+			msm_camera_io_r(ln + 0x14),
+			msm_camera_io_r(ln + 0x18),
+			msm_camera_io_r(ln + 0x1c),
+			msm_camera_io_r(ln + 0x20),
+			msm_camera_io_r(ln + 0x28),
+			msm_camera_io_r(ln + 0x2c));
+	}
+	pr_err("talkman_csiphy irq 0=0x%x 1=0x%x 2=0x%x 3=0x%x 4=0x%x pwr=0x%x\n",
+		msm_camera_io_r(csiphybase + 0x18c),
+		msm_camera_io_r(csiphybase + 0x190),
+		msm_camera_io_r(csiphybase + 0x194),
+		msm_camera_io_r(csiphybase + 0x198),
+		msm_camera_io_r(csiphybase + 0x19c),
+		msm_camera_io_r(csiphybase +
+			csiphy_dev->ctrl_reg->csiphy_reg.
+			mipi_csiphy_glbl_pwr_cfg_addr));
+	talkman_late_csiphy = csiphy_dev;
+	schedule_delayed_work(&talkman_csiphy_late, msecs_to_jiffies(300));
 	return rc;
 }
 

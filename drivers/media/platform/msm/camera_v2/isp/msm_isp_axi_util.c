@@ -700,6 +700,16 @@ void msm_isp_notify(struct vfe_device *vfe_dev, uint32_t event_type,
 	event_data.frame_id = vfe_dev->axi_data.src_info[frame_src].frame_id;
 	event_data.timestamp = ts->event_time;
 	event_data.mono_timestamp = ts->buf_time;
+	if (event_type == ISP_EVENT_SOF) {
+		static unsigned n;
+
+		if (n < 8) {
+			n++;
+			pr_err("talkman_vfe send SOF n=%u src=%u fid=%u type=0x%x\n",
+				n, frame_src, event_data.frame_id,
+				event_type | frame_src);
+		}
+	}
 	msm_isp_send_event(vfe_dev, event_type | frame_src, &event_data);
 }
 
@@ -2644,6 +2654,15 @@ void msm_isp_process_axi_irq(struct vfe_device *vfe_dev,
 	if (!(comp_mask || wm_mask))
 		return;
 
+	{
+		static unsigned n;
+
+		if (n < 8) {
+			n++;
+			pr_err("talkman_vfe axi irq n=%u s0=0x%x s1=0x%x comp=0x%x wm=0x%x\n",
+				n, irq_status0, irq_status1, comp_mask, wm_mask);
+		}
+	}
 	ISP_DBG("%s: status: 0x%x\n", __func__, irq_status0);
 	pingpong_status =
 		vfe_dev->hw_info->vfe_ops.axi_ops.get_pingpong_status(vfe_dev);

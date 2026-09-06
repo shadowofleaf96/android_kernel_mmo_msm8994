@@ -12,7 +12,7 @@
 
  #include "../qcom/msm8994-pinctrl.dtsi"
  #include "common/pinctrl.dtsi"
- #include "../qcom/msm8994-camera-sensor-mtp.dtsi"
+ #include "msm8994-cityman-camera.dtsi"
  
  #include "common/connectivity.dtsi"
  #include "common/nfc.dtsi"

@@ -352,6 +352,15 @@ void msm_isp_update_req_history(uint32_t client, uint64_t ab,
 static long msm_isp_dqevent(struct file *file, struct v4l2_fh *vfh, void *arg)
 {
 	long rc;
+	{
+		static unsigned n;
+
+		if (n < 8) {
+			n++;
+			pr_err("talkman_vfe dqevent enter n=%u compat=%d\n",
+				n, is_compat_task());
+		}
+	}
 	if (is_compat_task()) {
 		struct msm_isp_event_data32 *event_data32;
 		struct msm_isp_event_data  *event_data;
@@ -361,6 +370,15 @@ static long msm_isp_dqevent(struct file *file, struct v4l2_fh *vfh, void *arg)
 		memset(&isp_event, 0, sizeof(isp_event));
 		rc = v4l2_event_dequeue(vfh, &isp_event,
 				file->f_flags & O_NONBLOCK);
+		{
+			static unsigned n;
+
+			if (n < 8) {
+				n++;
+				pr_err("talkman_vfe dqevent n=%u rc=%ld type=0x%x\n",
+					n, rc, rc ? 0 : isp_event.type);
+			}
+		}
 		if (rc)
 			return rc;
 		event_data = (struct msm_isp_event_data *)
@@ -428,9 +446,35 @@ static long msm_isp_subdev_fops_ioctl(struct file *file, unsigned int cmd,
 	return video_usercopy(file, cmd, arg, msm_isp_subdev_do_ioctl);
 }
 
+#ifdef CONFIG_COMPAT
+static long msm_isp_subdev_fops_compat_ioctl(struct file *file,
+	unsigned int cmd, unsigned long arg)
+{
+	/* nr 89 = DQEVENT. 32-bit daemon uses VIDIOC_DQEVENT32 (different
+	 * _IOC_SIZE). Do not send MSM custom ioctls through
+	 * v4l2_compat_ioctl32: its default calls fops->compat_ioctl32
+	 * and recurses (#111 bootloop).
+	 */
+	{
+		static unsigned n;
+		unsigned nr = _IOC_NR(cmd);
+
+		if (n < 24 || (_IOC_TYPE(cmd) == 'V' && nr == 89)) {
+			n++;
+			pr_err("talkman_vfe compat ioctl n=%u cmd=0x%x type=%c nr=%u\n",
+				n, cmd, (char)_IOC_TYPE(cmd), nr);
+		}
+	}
+	if (_IOC_TYPE(cmd) == 'V' && _IOC_NR(cmd) == 89)
+		return v4l2_compat_ioctl32(file, cmd, arg);
+	return msm_isp_subdev_fops_ioctl(file, cmd, arg);
+}
+#endif
+
+
 static struct v4l2_file_operations msm_isp_v4l2_subdev_fops = {
 #ifdef CONFIG_COMPAT
-	.compat_ioctl32 = msm_isp_subdev_fops_ioctl,
+	.compat_ioctl32 = msm_isp_subdev_fops_compat_ioctl,
 #endif
 	.unlocked_ioctl = msm_isp_subdev_fops_ioctl
 };
