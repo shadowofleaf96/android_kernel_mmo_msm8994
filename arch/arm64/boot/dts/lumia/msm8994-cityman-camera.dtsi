@@ -1,5 +1,5 @@
 /*
- * talkman cameras — SMIA++ MSM sensor (smiapp ident).
+ * cityman cameras — SMIA++ MSM sensor (smiapp ident).
  *
  * Snaccy: WP modules are SMIA++; qcamera talks to Nokia X2 qcom,smia65pp;
  * rear HAL name is imx230; one s_ctrl per node; Hill first (front/iris
@@ -14,7 +14,7 @@
  *   Front CAMF CCI0 CSI2 GPIO 15/104/105 L17 2.80 + LVS1
  *   Iris CAMT  CCI0 CSI3 GPIO 14/102/106 L17 + L3 + LVS1, 8-bit 0x6C
  * CAMP F0 muxes CCI1 onto GPIO 19/20 (cci1_active). CCI0 on 17/18 is
- * Qualcomm default; talkman CAMP uses 17/18 as extra MCLKs, rear MCLK is 13.
+ * Qualcomm default; cityman CAMP uses 17/18 as extra MCLKs, rear MCLK is 13.
  *
  * snaccy lumia/camera.dtsi swapped VIO/VAF names (L23 as vio, LVS1 as vaf).
  * Follow ACPI: LVS1 is shared 1.8V VIO — enable and never disable.
@@ -39,7 +39,7 @@
 		qcom,csiphy-sd-index = <0>;
 		qcom,csid-sd-index = <0>;
 		qcom,mount-angle = <90>;
-		qcom,sensor-name = "imx230";
+		qcom,sensor-name = "mot_imx230";
 		qcom,sensor-position = <0>;
 		qcom,sensor-mode = <0>;
 		qcom,cci-master = <1>;

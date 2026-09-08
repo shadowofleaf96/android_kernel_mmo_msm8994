@@ -71,6 +71,7 @@
 			proxy-supply = <&pm8994_l2>;
 			qcom,proxy-consumer-enable;
 			qcom,proxy-consumer-current = <10000>;
+			regulator-always-on;
 			status = "okay";
 		};
 	};

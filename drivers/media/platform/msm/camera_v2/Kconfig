@@ -177,7 +177,7 @@ config OV5645
 
 
 config SMIA65PP
-	bool "SMIA++ sensors (talkman Hill/Ducati)"
+	bool "SMIA++ sensors (cityman Hill/Ducati)"
 	depends on MSMB_CAMERA
 	---help---
 	  Nokia/QCOM wrapper for SMIA++ modules (Lumia 950). Ident uses

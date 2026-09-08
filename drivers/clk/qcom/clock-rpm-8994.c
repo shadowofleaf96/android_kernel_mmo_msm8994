@@ -329,6 +329,11 @@ static int msm_rpmcc_8994_probe(struct platform_device *pdev)
 	clk_set_rate(&mmssnoc_ahb_a_clk.c, 40000000);
 	clk_prepare_enable(&mmssnoc_ahb_a_clk.c);
 
+	/* Force RF and Baseband clocks always-on for Cityman WTR3925 */
+	clk_prepare_enable(&rf_clk1.c);
+	clk_prepare_enable(&rf_clk2.c);
+	clk_prepare_enable(&bb_clk1.c);
+
 	dev_info(&pdev->dev, "Registered RPM clocks.\n");
 
 	return 0;
